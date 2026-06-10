@@ -10,6 +10,57 @@ from openai.types.chat import ChatCompletion
 
 from app.config import config
 
+# ── Humanizer — Anti-AI Writing Filter (blader/humanizer fork, 2026-06-10) ────
+import os as _os, urllib.request as _ur, json as _hjson
+
+_OR_KEY   = _os.environ.get("OPENROUTER_API_KEY", "")
+_OR_MODEL = _os.environ.get("OPENROUTER_MODEL", "anthropic/claude-fable-5")
+
+_HUMANIZER_SYSTEM = (
+    "You are a writing editor. Remove ALL signs of AI-generated writing. "
+    "Eliminate: testament/landscape/tapestry/delve/pivotal/groundbreaking/unleash/"
+    "beacon/foster/realm/seamlessly/robust/leverage/streamline/elevate/embark/"
+    "crucial/multifaceted/nuanced/holistic/synergy/paradigm/bustling/vibrant/"
+    "game-changing/cutting-edge/transformative. "
+    "Kill: significance inflation, rule of three padding, em dash overuse, "
+    "chatbot artifacts (Certainly!/Absolutely!/Great question), passive voice, "
+    "manufactured punchlines, synonym cycling, hollow openers (In todays world), "
+    "signposting (It is worth noting). "
+    "Preserve ALL meaning and length. Match original tone. Output ONLY rewritten text."
+)
+
+def humanize(text: str) -> str:
+    if not _OR_KEY or not text or len(text) < 80:
+        return text
+    try:
+        payload = _hjson.dumps({
+            "model": _OR_MODEL,
+            "messages": [
+                {"role": "system", "content": _HUMANIZER_SYSTEM},
+                {"role": "user", "content": "Humanize this:\n\n" + text}
+            ],
+            "max_tokens": min(len(text.split()) * 3, 2000)
+        }).encode()
+        req = _ur.Request(
+            "https://openrouter.ai/api/v1/chat/completions",
+            data=payload,
+            headers={
+                "Authorization": "Bearer " + _OR_KEY,
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://github.com/kevinleestites2-dev",
+                "X-Title": "ContentPrime-Humanizer"
+            },
+            method="POST"
+        )
+        with _ur.urlopen(req, timeout=30) as r:
+            result = _hjson.loads(r.read())
+            out = result["choices"][0]["message"]["content"].strip()
+            logger.info("[Humanizer] " + str(len(text)) + " -> " + str(len(out)) + " chars")
+            return out
+    except Exception as e:
+        logger.warning("[Humanizer] Failed, returning original: " + str(e))
+        return text
+
 _max_retries = 5
 _DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 _DEPRECATED_GEMINI_MODELS = {"gemini-pro", "gemini-1.0-pro"}
@@ -523,7 +574,7 @@ Generate a script for a video, depending on the subject of the video.
         logger.error(f"failed to generate video script: {final_script}")
     else:
         logger.success(f"completed: \n{final_script}")
-    return final_script.strip()
+    return humanize(final_script.strip())
 
 
 def generate_terms(video_subject: str, video_script: str, amount: int = 5) -> List[str]:
@@ -562,7 +613,7 @@ Please note that you must use English for generating video search terms; Chinese
             response = _generate_response(prompt)
             if "Error: " in response:
                 logger.error(f"failed to generate video script: {response}")
-                return response
+                return response  # terms are keywords, skip humanizer
             search_terms = json.loads(response)
             if not isinstance(search_terms, list) or not all(
                 isinstance(term, str) for term in search_terms
